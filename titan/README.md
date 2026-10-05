@@ -19,7 +19,10 @@ libretro-thumbnails.
   - Run it after each upstream sync.
   - Curated fixes go in `MANUAL_EXTRA`, or edit the JSON directly via a PR.
 
+Thumbnails that are git symlinks are resolved to their real file by the
+generator: raw GitHub serves a symlink as text, never the image.
+
 Coverage at generation (2026-10-05): 10,401 of 12,909 serials mapped,
-reaching 8,212 of 8,502 boxart files. 200 of those mappings come from the
+reaching 8,196 of 8,502 boxart files (23 mappings resolved through symlinks). 200 of those mappings come from the
 region-subset rule (a `(USA)` print for a `(USA, Canada)` release). Unmapped
 serials fall back to the UI's generated cover.

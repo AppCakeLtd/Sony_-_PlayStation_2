@@ -20,6 +20,10 @@
 #      (Redump renamed "(USA)" releases to "(USA, Canada)"; the thumbnail
 #      kept "(USA)"), again unambiguous only.
 #
+# Symlinks: some thumbnails are git symlinks to another variant's file. Raw
+# GitHub serves a symlink as its target path in plain text, never the image,
+# so every mapped name is resolved here to the real file it points to.
+#
 # Usage:  python3 titan/generate-mapping.py   (from the repo root; needs
 # network; overwrites titan/serials-boxarts.json). Run after every upstream
 # thumbnails sync. The generator preserves nothing: fold manual fixes into
@@ -50,13 +54,40 @@ def fetch(url):
     return urllib.request.urlopen(url).read().decode('utf-8')
 
 def tree_files(root, sub):
-    out = subprocess.check_output(['git', '-C', root, 'ls-tree', '--name-only', 'HEAD', sub + '/'],
-                                  text=True)
-    return sorted(os.path.basename(l) for l in out.splitlines() if l.endswith('.png'))
+    """(all .png names, {symlink name: its git blob}) for one art directory."""
+    out = subprocess.check_output(['git', '-C', root, 'ls-tree', 'HEAD', sub + '/'], text=True)
+    files, links = [], {}
+    for line in out.splitlines():
+        meta, path = line.split('\t', 1)
+        name = os.path.basename(path)
+        if not name.endswith('.png'):
+            continue
+        files.append(name)
+        mode, _, blob = meta.split()
+        if mode == '120000':
+            links[name] = blob
+    return sorted(files), links
+
+def resolver(root, files, links):
+    """Follow symlinks (blobs fetched on demand in a partial clone) to a real
+    file in the same directory; None when the chain leaves it or dangles."""
+    fileset = set(files)
+    def resolve(name):
+        for _ in range(8):
+            if name not in links:
+                return name if name in fileset else None
+            target = subprocess.check_output(['git', '-C', root, 'cat-file', '-p', links[name]],
+                                             text=True).strip()
+            if '/' in target.replace('./', ''):
+                return None
+            name = target.replace('./', '')
+        return None
+    return resolve
 
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    files = tree_files(root, 'Named_Boxarts')
+    files, links = tree_files(root, 'Named_Boxarts')
+    resolve = resolver(root, files, links)
 
     entries = {}
     for name, serial in re.findall(r'game \(\s*\n\tname "([^"]+)"(?:\n\tregion "[^"]*")?\n\tserial "([^"]+)"',
@@ -101,6 +132,17 @@ def main():
             by_subset += 1
         elif cands or sub:
             ambiguous.append((serial, name))
+    resolved, dangling = 0, []
+    for serial in list(mapping):
+        f = mapping[serial]
+        if f in links:
+            real = resolve(f)
+            if real:
+                mapping[serial] = real
+                resolved += 1
+            else:
+                del mapping[serial]
+                dangling.append((serial, f))
     mapping.update(MANUAL_EXTRA)
 
     out = os.path.join(root, 'titan', 'serials-boxarts.json')
@@ -109,8 +151,11 @@ def main():
     print(f"serials: {len(entries)}  mapped: {len(mapping)} ({by_subset} by region subset)  "
           f"ambiguous skipped: {len(ambiguous)}")
     print(f"art files reached: {reached} of {len(files)}")
+    print(f"symlinks resolved: {resolved}  dangling dropped: {len(dangling)}")
     for s, n in ambiguous:
         print(f"  AMBIGUOUS {s}  {n}", file=sys.stderr)
+    for s, f in dangling:
+        print(f"  DANGLING {s}  {f}", file=sys.stderr)
 
 if __name__ == '__main__':
     main()
